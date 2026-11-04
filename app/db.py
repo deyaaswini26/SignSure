@@ -11,20 +11,18 @@ All functions raise ``sqlite3.IntegrityError`` for constraint violations and
 not already exist.
 """
 
-
-
-
-
-
 import sqlite3
 import datetime
 import pathlib
 from typing import Optional, List, Dict, Any
 
+# Default location of the SQLite database file (inside the ``data`` folder).
+DEFAULT_DB_PATH = pathlib.Path(__file__).resolve().parents[1] / "data" / "signsure.db"
+
+
 # Helper function to revoke a signer
 def revoke_trusted_signer(signer_id: int, db_path: Optional[pathlib.Path] = None) -> None:
-    """Set trust_status='revoked' for the given signer.
-    """
+    """Set trust_status='revoked' for the given signer."""
     conn = _get_connection(db_path)
     try:
         cur = conn.cursor()
@@ -32,11 +30,12 @@ def revoke_trusted_signer(signer_id: int, db_path: Optional[pathlib.Path] = None
             """
             UPDATE trusted_signers SET trust_status = 'revoked' WHERE signer_id = ?
             """,
-            (signer_id,)
+            (signer_id,),
         )
         conn.commit()
     finally:
         conn.close()
+
 
 # Helper to fetch verification logs for a document
 def get_verification_logs(document_id: int, db_path: Optional[pathlib.Path] = None) -> List[Dict[str, Any]]:
@@ -45,11 +44,12 @@ def get_verification_logs(document_id: int, db_path: Optional[pathlib.Path] = No
         cur = conn.cursor()
         cur.execute(
             "SELECT * FROM verification_logs WHERE document_id = ? ORDER BY verification_timestamp DESC",
-            (document_id,)
+            (document_id,),
         )
         return [dict(row) for row in cur.fetchall()]
     finally:
         conn.close()
+
 
 # Stats helpers
 def get_stats(db_path: Optional[pathlib.Path] = None) -> Dict[str, int]:
@@ -75,14 +75,6 @@ def get_stats(db_path: Optional[pathlib.Path] = None) -> Dict[str, int]:
         }
     finally:
         conn.close()
-
-
-
-
-from typing import Optional, List, Dict, Any, Dict, List, Any
-
-# Default location of the SQLite database file (inside the ``data`` folder).
-DEFAULT_DB_PATH = pathlib.Path(__file__).resolve().parents[1] / "data" / "signsure.db"
 
 
 def _get_connection(db_path: Optional[pathlib.Path] = None) -> sqlite3.Connection:
@@ -278,6 +270,40 @@ def is_signer_trusted(fingerprint: str, db_path: Optional[pathlib.Path] = None) 
     return get_trusted_signer_by_fingerprint(fingerprint, db_path) is not None
 
 
+def get_signer_record_by_fingerprint(
+    fingerprint: str, db_path: Optional[pathlib.Path] = None
+) -> Optional[Dict[str, Any]]:
+    """Return a signer row regardless of trust_status ('trusted' or 'revoked'), or None if unregistered."""
+    conn = _get_connection(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM trusted_signers WHERE public_key_fingerprint = ?",
+            (fingerprint,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_trusted_signers(db_path: Optional[pathlib.Path] = None) -> List[Dict[str, Any]]:
+    """Return all rows in trusted_signers ordered by registration_timestamp descending."""
+    conn = _get_connection(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT signer_id, signer_name, public_key_fingerprint, registration_timestamp, trust_status
+            FROM trusted_signers
+            ORDER BY registration_timestamp DESC
+            """
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Verification logging
 # ---------------------------------------------------------------------------
@@ -318,6 +344,37 @@ def record_verification(
         conn.close()
 
 
+def list_all_verification_logs(db_path: Optional[pathlib.Path] = None) -> List[Dict[str, Any]]:
+    """Return all verification_logs joined with documents and trusted_signers for audit display."""
+    conn = _get_connection(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                v.log_id,
+                v.verification_id,
+                v.document_id,
+                v.verification_timestamp,
+                v.verification_result,
+                v.failure_reason,
+                d.original_filename,
+                d.sha256_hash,
+                d.public_key_fingerprint,
+                d.signing_timestamp,
+                s.signer_name,
+                s.trust_status
+            FROM verification_logs v
+            LEFT JOIN documents d ON v.verification_id = d.verification_id
+            LEFT JOIN trusted_signers s ON d.public_key_fingerprint = s.public_key_fingerprint
+            ORDER BY v.verification_timestamp DESC, v.log_id DESC
+            """
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Helper functions (internal)
 # ---------------------------------------------------------------------------
@@ -337,7 +394,13 @@ __all__ = [
     "list_documents",
     "register_trusted_signer",
     "get_trusted_signer_by_fingerprint",
+    "get_signer_record_by_fingerprint",
     "is_signer_trusted",
+    "list_trusted_signers",
+    "revoke_trusted_signer",
     "record_verification",
+    "get_verification_logs",
+    "list_all_verification_logs",
+    "get_stats",
     "DEFAULT_DB_PATH",
 ]
